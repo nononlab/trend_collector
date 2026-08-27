@@ -8,8 +8,8 @@ NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
-# 💡 이 곳에 모으고 싶은 관심 분야 키워드를 자유롭게 적어주세요!
-KEYWORDS = ["AI 마케팅", "인스타그램 알고리즘", "Z세대 트렌드", "숏폼 마케팅", "콘텐츠 마케팅", "트렌드 분석"]
+# 💡 원하는 키워드로 수정하세요
+KEYWORDS = ["생성형 AI", "플랫폼 서비스", "스타트업 트렌드", "Z세대 트렌드", "숏폼 마케팅"]
 
 def fetch_youtube(keyword):
     if not YOUTUBE_API_KEY: 
@@ -56,7 +56,6 @@ def send_to_notion(item):
         "Content-Type": "application/json",
         "Notion-Version": "2022-06-28"
     }
-    # 오늘 날짜 추출 (YYYY-MM-DD)
     today = datetime.now().strftime("%Y-%m-%d")
     
     payload = {
@@ -68,7 +67,7 @@ def send_to_notion(item):
             "트렌드 점수": {"number": item["score"]},
             "상태": {"status": {"name": "시작 전"}},
             "링크": {"url": item["link"]},
-            "날짜": {"date": {"start": today}}  # 날짜 필드 자동 채우기
+            "날짜": {"date": {"start": today}}
         }
     }
     requests.post(url, headers=headers, json=payload)
