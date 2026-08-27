@@ -9,7 +9,7 @@ NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
 # 💡 이 곳에 모으고 싶은 관심 분야 키워드를 자유롭게 적어주세요!
-KEYWORDS = ["AI 마케팅", "인스타그램 알고리즘", "생성형 AI", "콘텐츠 마케팅", "트렌드 분석"]
+KEYWORDS = ["AI 마케팅", "인스타그램 알고리즘", "Z세대 트렌드", "숏폼 마케팅", "콘텐츠 마케팅", "트렌드 분석"]
 
 def fetch_youtube(keyword):
     if not YOUTUBE_API_KEY: 
