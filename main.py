@@ -8,8 +8,35 @@ NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
-# 💡 원하는 키워드로 수정하세요
 KEYWORDS = ["생성형 AI", "플랫폼 서비스", "스타트업 트렌드", "Z세대 트렌드", "숏폼 마케팅"]
+
+# 1. 노션 DB에 이미 저장되어 있는 링크 목록 불러오기
+def get_existing_urls():
+    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
+    headers = {
+        "Authorization": f"Bearer {NOTION_TOKEN}",
+        "Notion-Version": "2022-06-28"
+    }
+    existing_urls = set()
+    has_more = True
+    next_cursor = None
+    
+    while has_more:
+        payload = {"page_size": 100}
+        if next_cursor:
+            payload["start_cursor"] = next_cursor
+        res = requests.post(url, headers=headers, json=payload)
+        if res.status_code == 200:
+            data = res.json()
+            for page in data.get("results", []):
+                link_prop = page.get("properties", {}).get("링크", {}).get("url")
+                if link_prop:
+                    existing_urls.add(link_prop)
+            has_more = data.get("has_more", False)
+            next_cursor = data.get("next_cursor")
+        else:
+            break
+    return existing_urls
 
 def fetch_youtube(keyword):
     if not YOUTUBE_API_KEY: 
@@ -73,13 +100,20 @@ def send_to_notion(item):
     requests.post(url, headers=headers, json=payload)
 
 def main():
-    seen_urls = set()
+    existing_urls = get_existing_urls()
+    print(f"📌 현재 노션 DB에 존재하는 기존 데이터 수: {len(existing_urls)}개")
+    
+    new_count = 0
     for kw in KEYWORDS:
         data = fetch_youtube(kw) + fetch_rss(kw)
         for item in data:
-            if item["link"] not in seen_urls:
-                seen_urls.add(item["link"])
+            if item["link"] not in existing_urls:
+                existing_urls.add(item["link"])
                 send_to_notion(item)
+                new_count += 1
+                print(f"✅ 새 트렌드 추가됨: {item['title']}")
+                
+    print(f"🎉 총 {new_count}개의 새로운 트렌드가 추가되었습니다.")
 
 if __name__ == "__main__":
     main()
