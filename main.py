@@ -2,13 +2,14 @@ import os
 import re
 import requests
 import xml.etree.ElementTree as ET
+from datetime import datetime
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
-# 수집하고 싶은 키워드 목록
-KEYWORDS = ["AI 마케팅", "인스타그램 알고리즘", "리쥬란", "울쎄라", "다이어트 얼굴 꺼짐"]
+# 💡 이 곳에 모으고 싶은 관심 분야 키워드를 자유롭게 적어주세요!
+KEYWORDS = ["AI 마케팅", "인스타그램 알고리즘", "생성형 AI", "콘텐츠 마케팅", "트렌드 분석"]
 
 def fetch_youtube(keyword):
     if not YOUTUBE_API_KEY: 
@@ -55,6 +56,9 @@ def send_to_notion(item):
         "Content-Type": "application/json",
         "Notion-Version": "2022-06-28"
     }
+    # 오늘 날짜 추출 (YYYY-MM-DD)
+    today = datetime.now().strftime("%Y-%m-%d")
+    
     payload = {
         "parent": {"database_id": NOTION_DATABASE_ID},
         "properties": {
@@ -63,7 +67,8 @@ def send_to_notion(item):
             "키워드": {"multi_select": [{"name": item["keyword"]}]},
             "트렌드 점수": {"number": item["score"]},
             "상태": {"status": {"name": "시작 전"}},
-            "링크": {"url": item["link"]}
+            "링크": {"url": item["link"]},
+            "날짜": {"date": {"start": today}}  # 날짜 필드 자동 채우기
         }
     }
     requests.post(url, headers=headers, json=payload)
