@@ -5,7 +5,6 @@ import imaplib
 import email
 from email.header import decode_header
 import xml.etree.ElementTree as ET
-from bs4 import BeautifulSoup
 from datetime import datetime
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
@@ -14,16 +13,12 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 
-# 1. 웹 RSS 뉴스레터 목록
+# 수집할 RSS 및 스티비 아카이브 목록
 RSS_FEEDS = [
+    {"name": "스티비 아카이브", "url": "https://page.stibee.com/rss/archives/325254"},
     {"name": "뉴닉", "url": "https://www.newneek.co/rss"},
     {"name": "고구마팜", "url": "https://gogumafarm.kr/feed/"},
-    {"name": "트렌드/마케팅 뉴스", "url": "https://news.google.com/rss/search?q=플랫폼+서비스+OR+Z세대+트렌드+OR+마케팅+사례+OR+팝업스토어&hl=ko&gl=KR&ceid=KR:ko"}
-]
-
-# 2. 스티비 아카이브 사이트 목록 (직접 URL 지정)
-STIBEE_ARCHIVES = [
-    {"name": "스티비 뉴스레터", "url": "https://page.stibee.com/archives/325254"}
+    {"name": "마케팅/트렌드 뉴스", "url": "https://news.google.com/rss/search?q=플랫폼+서비스+OR+Z세대+트렌드+OR+마케팅+사례+OR+팝업스토어&hl=ko&gl=KR&ceid=KR:ko"}
 ]
 
 def get_existing_urls():
@@ -55,7 +50,8 @@ def get_existing_urls():
 
 def generate_carousel_script(title, content_text):
     if not OPENAI_API_KEY:
-        return "OpenAI API 키가 없습니다."
+        print("⚠️ OPENAI_API_KEY가 없습니다.")
+        return "OpenAI API 키가 설정되지 않았습니다."
     
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
@@ -102,48 +98,33 @@ def generate_carousel_script(title, content_text):
     if res.status_code == 200:
         return res.json()["choices"][0]["message"]["content"].strip()
     else:
-        return f"대본 생성 실패: {res.status_code}"
+        print(f"⚠️ OpenAI 오류: {res.status_code} - {res.text}")
+        return f"대본 생성 실패 ({res.status_code})"
 
-def fetch_stibee_archives():
-    """스티비 아카이브 페이지에서 직접 최신 뉴스레터를 크롤링"""
+def fetch_rss_items():
     items = []
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    
-    for feed in STIBEE_ARCHIVES:
+    headers = {"User-Agent": "Mozilla/5.0"}
+    for feed in RSS_FEEDS:
         try:
             res = requests.get(feed["url"], headers=headers, timeout=10)
             if res.status_code == 200:
-                soup = BeautifulSoup(res.text, "html.parser")
-                
-                # 아카이브 목록에서 개별 아카이브 링크 수집
-                links = soup.find_all("a")
-                found_count = 0
-                
-                for a in links:
-                    href = a.get("href", "")
-                    title = a.get_text(strip=True)
+                root = ET.fromstring(res.content)
+                for item in root.findall(".//item")[:2]:
+                    title = item.find("title").text if item.find("title") is not None else ""
+                    link = item.find("link").text if item.find("link") is not None else ""
+                    desc = item.find("description").text if item.find("description") is not None else ""
                     
-                    if href and title and len(title) > 3:
-                        full_link = href if href.startswith("http") else f"https://page.stibee.com{href}"
-                        
-                        # 아카이브 개별 본문 페이지 접근
-                        detail_res = requests.get(full_link, headers=headers, timeout=10)
-                        if detail_res.status_code == 200:
-                            detail_soup = BeautifulSoup(detail_res.text, "html.parser")
-                            clean_text = detail_soup.get_text(separator=" ", strip=True)
-                            
-                            items.append({
-                                "title": title,
-                                "link": full_link,
-                                "source": feed["name"],
-                                "description": clean_text[:2000]
-                            })
-                            found_count += 1
-                            if found_count >= 2:  # 최신 글 2개 수집 후 종료
-                                break
+                    clean_desc = re.sub(r'<[^>]+>', '', desc)
+                    clean_title = re.sub(r' - [^-]+$', '', title)
+                    
+                    items.append({
+                        "title": clean_title,
+                        "link": link,
+                        "source": feed["name"],
+                        "description": clean_desc
+                    })
         except Exception as e:
-            print(f"스티비 크롤링 에러 ({feed['name']}): {e}")
-            
+            print(f"Error fetching {feed['name']}: {e}")
     return items
 
 def fetch_gmail_newsletters():
@@ -205,31 +186,6 @@ def fetch_gmail_newsletters():
         
     return items
 
-def fetch_rss_items():
-    items = []
-    for feed in RSS_FEEDS:
-        try:
-            res = requests.get(feed["url"], timeout=10)
-            if res.status_code == 200:
-                root = ET.fromstring(res.content)
-                for item in root.findall(".//item")[:2]:
-                    title = item.find("title").text if item.find("title") is not None else ""
-                    link = item.find("link").text if item.find("link") is not None else ""
-                    desc = item.find("description").text if item.find("description") is not None else ""
-                    
-                    clean_desc = re.sub(r'<[^>]+>', '', desc)
-                    clean_title = re.sub(r' - [^-]+$', '', title)
-                    
-                    items.append({
-                        "title": clean_title,
-                        "link": link,
-                        "source": feed["name"],
-                        "description": clean_desc
-                    })
-        except Exception as e:
-            print(f"Error fetching {feed['name']}: {e}")
-    return items
-
 def send_to_notion(item, carousel_script):
     url = "https://api.notion.com/v1/pages"
     headers = {
@@ -258,8 +214,7 @@ def main():
     existing_urls = get_existing_urls()
     print(f"📌 기존 저장된 링크 수: {len(existing_urls)}개")
     
-    # RSS, 스티비 아카이브, 지메일 수집 통합
-    all_items = fetch_rss_items() + fetch_stibee_archives() + fetch_gmail_newsletters()
+    all_items = fetch_rss_items() + fetch_gmail_newsletters()
     new_count = 0
     
     for item in all_items:
