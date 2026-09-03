@@ -5,6 +5,7 @@ import imaplib
 import email
 from email.header import decode_header
 import xml.etree.ElementTree as ET
+from bs4 import BeautifulSoup
 from datetime import datetime
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
@@ -13,7 +14,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 
-# 수집할 RSS 및 스티비 아카이브 목록 (limit으로 매체별 수집 개수 지정)
+# 1. 수집할 RSS 목록
 RSS_FEEDS = [
     {"name": "고구마팜", "url": "https://gogumafarm.kr/feed/", "limit": 7},
     {"name": "뉴닉", "url": "https://www.newneek.co/rss", "limit": 7},
@@ -49,12 +50,17 @@ def get_existing_urls():
     return existing_urls
 
 def generate_carousel_script(title, content_text):
-    """Google Gemini 무료 API (gemini-1.5-flash) 사용"""
+    """Google Gemini API (gemini-2.0-flash 및 폴백 적용)"""
     if not GEMINI_API_KEY:
         print("⚠️ GEMINI_API_KEY가 설정되지 않았습니다.")
         return "Gemini API 키가 없습니다."
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    model_urls = [
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
+    ]
+    
     headers = {"Content-Type": "application/json"}
     
     prompt = f"""
@@ -89,17 +95,65 @@ def generate_carousel_script(title, content_text):
         }]
     }
 
+    for base_url in model_urls:
+        endpoint = f"{base_url}?key={GEMINI_API_KEY}"
+        try:
+            res = requests.post(endpoint, headers=headers, json=payload, timeout=20)
+            if res.status_code == 200:
+                data = res.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            else:
+                print(f"⚠️ Gemini 모델 시도 실패 ({base_url.split('/')[-1]}): {res.status_code}")
+        except Exception as e:
+            print(f"⚠️ Gemini 통신 에러: {e}")
+            
+    return "대본 생성 실패 (모든 Gemini 모델 응답 불가)"
+
+def fetch_wepick_articles():
+    """위픽레터(letter.wepick.kr/latest) 아티클 직접 크롤링 수집"""
+    items = []
+    url = "https://letter.wepick.kr/latest"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=20)
+        res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
-            data = res.json()
-            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        else:
-            print(f"⚠️ Gemini API 오류 ({res.status_code}): {res.text}")
-            return f"대본 생성 실패 ({res.status_code})"
+            soup = BeautifulSoup(res.text, "html.parser")
+            post_links = []
+            
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if "/post/" in href:
+                    full_url = href if href.startswith("http") else f"https://letter.wepick.kr{href}"
+                    if full_url not in post_links:
+                        post_links.append(full_url)
+            
+            for post_url in post_links[:5]:  # 최신 아티클 5개 수집
+                try:
+                    p_res = requests.get(post_url, headers=headers, timeout=10)
+                    if p_res.status_code == 200:
+                        p_soup = BeautifulSoup(p_res.text, "html.parser")
+                        
+                        # 제목 추출
+                        title_el = p_soup.find("h1") or p_soup.find("title")
+                        title = title_el.get_text(strip=True) if title_el else "위픽레터 아티클"
+                        title = re.sub(r' - 위픽레터.*$', '', title)
+                        
+                        # 본문 내용 추출
+                        clean_text = p_soup.get_text(separator=" ", strip=True)
+                        clean_text = re.sub(r'\s+', ' ', clean_text)
+                        
+                        items.append({
+                            "title": title,
+                            "link": post_url,
+                            "source": "위픽레터",
+                            "description": clean_text[:2000]
+                        })
+                except Exception as e:
+                    print(f"위픽레터 아티클 수집 오류 ({post_url}): {e}")
     except Exception as e:
-        print(f"⚠️ Gemini 통신 에러: {e}")
-        return "Gemini API 연결 실패"
+        print(f"위픽레터 크롤링 오류: {e}")
+        
+    return items
 
 def fetch_rss_items():
     items = []
@@ -138,14 +192,16 @@ def fetch_gmail_newsletters():
         mail.login(GMAIL_USER, GMAIL_APP_PASSWORD)
         mail.select('INBOX')
         
-        status, messages = mail.search('utf-8', 'X-GM-RAW', 'label:뉴스레터 is:unread')
+        raw_query = 'label:뉴스레터 is:unread'.encode('utf-8')
+        status, messages = mail.search('utf-8', 'X-GM-RAW', raw_query)
+        
         if status != 'OK' or not messages[0]:
             print("📬 새 지메일 뉴스레터가 없습니다.")
             mail.logout()
             return []
 
         email_ids = messages[0].split()
-        for e_id in email_ids[-5:]:  # 안 읽은 지메일 최대 5개까지 수집
+        for e_id in email_ids[-5:]:
             _, msg_data = mail.fetch(e_id, '(RFC822)')
             for response_part in msg_data:
                 if isinstance(response_part, tuple):
@@ -222,7 +278,8 @@ def main():
     existing_urls = get_existing_urls()
     print(f"📌 기존 저장된 링크 수: {len(existing_urls)}개")
     
-    all_items = fetch_rss_items() + fetch_gmail_newsletters()
+    # RSS + 위픽레터 웹 크롤링 + 지메일 수집통합
+    all_items = fetch_rss_items() + fetch_wepick_articles() + fetch_gmail_newsletters()
     new_count = 0
     
     for item in all_items:
