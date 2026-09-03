@@ -1,19 +1,29 @@
 import os
 import re
 import requests
+import imaplib
+import email
+from email.header import decode_header
 import xml.etree.ElementTree as ET
+from bs4 import BeautifulSoup
 from datetime import datetime
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GMAIL_USER = os.getenv("GMAIL_USER")
+GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 
-# 웹에서 바로 가져오는 뉴스레터 및 트렌드 RSS 목록
-# ('생성형 AI', '스타트업 트렌드', '숏폼 마케팅' 제외 반영)
+# 1. 웹 RSS 뉴스레터 목록
 RSS_FEEDS = [
     {"name": "뉴닉", "url": "https://www.newneek.co/rss"},
     {"name": "고구마팜", "url": "https://gogumafarm.kr/feed/"},
     {"name": "트렌드/마케팅 뉴스", "url": "https://news.google.com/rss/search?q=플랫폼+서비스+OR+Z세대+트렌드+OR+마케팅+사례+OR+팝업스토어&hl=ko&gl=KR&ceid=KR:ko"}
+]
+
+# 2. 스티비 아카이브 사이트 목록 (직접 URL 지정)
+STIBEE_ARCHIVES = [
+    {"name": "스티비 뉴스레터", "url": "https://page.stibee.com/archives/325254"}
 ]
 
 def get_existing_urls():
@@ -44,9 +54,8 @@ def get_existing_urls():
     return existing_urls
 
 def generate_carousel_script(title, content_text):
-    """OpenAI API를 활용해 원문을 5장 캐러셀 대본으로 변환"""
     if not OPENAI_API_KEY:
-        return "OpenAI API 키가 설정되지 않았습니다."
+        return "OpenAI API 키가 없습니다."
     
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
@@ -56,7 +65,7 @@ def generate_carousel_script(title, content_text):
     
     prompt = f"""
     당신은 인스타그램 트렌드/마케팅 캐러셀(카드뉴스) 전문 기획자입니다.
-    아래 글을 바탕으로 5장 분량의 인스타그램 캐러셀 슬라이드 대본을 작성해 주세요.
+    아래 뉴스레터 글을 바탕으로 5장 분량의 인스타그램 캐러셀 슬라이드 대본을 작성해 주세요.
 
     [글 제목]: {title}
     [글 내용/요약]: {content_text[:1500]}
@@ -93,7 +102,108 @@ def generate_carousel_script(title, content_text):
     if res.status_code == 200:
         return res.json()["choices"][0]["message"]["content"].strip()
     else:
-        return f"대본 생성 실패 ({res.status_code}): {res.text}"
+        return f"대본 생성 실패: {res.status_code}"
+
+def fetch_stibee_archives():
+    """스티비 아카이브 페이지에서 직접 최신 뉴스레터를 크롤링"""
+    items = []
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    
+    for feed in STIBEE_ARCHIVES:
+        try:
+            res = requests.get(feed["url"], headers=headers, timeout=10)
+            if res.status_code == 200:
+                soup = BeautifulSoup(res.text, "html.parser")
+                
+                # 아카이브 목록에서 개별 아카이브 링크 수집
+                links = soup.find_all("a")
+                found_count = 0
+                
+                for a in links:
+                    href = a.get("href", "")
+                    title = a.get_text(strip=True)
+                    
+                    if href and title and len(title) > 3:
+                        full_link = href if href.startswith("http") else f"https://page.stibee.com{href}"
+                        
+                        # 아카이브 개별 본문 페이지 접근
+                        detail_res = requests.get(full_link, headers=headers, timeout=10)
+                        if detail_res.status_code == 200:
+                            detail_soup = BeautifulSoup(detail_res.text, "html.parser")
+                            clean_text = detail_soup.get_text(separator=" ", strip=True)
+                            
+                            items.append({
+                                "title": title,
+                                "link": full_link,
+                                "source": feed["name"],
+                                "description": clean_text[:2000]
+                            })
+                            found_count += 1
+                            if found_count >= 2:  # 최신 글 2개 수집 후 종료
+                                break
+        except Exception as e:
+            print(f"스티비 크롤링 에러 ({feed['name']}): {e}")
+            
+    return items
+
+def fetch_gmail_newsletters():
+    if not GMAIL_USER or not GMAIL_APP_PASSWORD:
+        return []
+
+    items = []
+    try:
+        mail = imaplib.IMAP4_SSL("imap.gmail.com")
+        mail.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+        
+        status, _ = mail.select('"뉴스레터"')
+        if status != 'OK':
+            mail.select('INBOX')
+            
+        status, messages = mail.search(None, 'UNSEEN')
+        if status != 'OK' or not messages[0]:
+            return []
+
+        email_ids = messages[0].split()
+        for e_id in email_ids[-3:]:
+            _, msg_data = mail.fetch(e_id, '(RFC822)')
+            for response_part in msg_data:
+                if isinstance(response_part, tuple):
+                    msg = email.message_from_bytes(response_part[1])
+                    
+                    subject, encoding = decode_header(msg["Subject"])[0]
+                    if isinstance(subject, bytes):
+                        subject = subject.decode(encoding if encoding else "utf-8", errors="ignore")
+                    
+                    body = ""
+                    if msg.is_multipart():
+                        for part in msg.walk():
+                            content_type = part.get_content_type()
+                            if content_type in ["text/plain", "text/html"]:
+                                try:
+                                    body = part.get_payload(decode=True).decode("utf-8", errors="ignore")
+                                    break
+                                except:
+                                    pass
+                    else:
+                        body = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
+                    
+                    clean_body = re.sub(r'<[^>]+>', '', body)
+                    clean_body = re.sub(r'\s+', ' ', clean_body).strip()
+                    
+                    msg_id = msg.get("Message-ID", f"email_{e_id.decode()}")
+                    fake_link = f"https://mail.google.com/mail/#search/{msg_id}"
+                    
+                    items.append({
+                        "title": subject,
+                        "link": fake_link,
+                        "source": "지메일 뉴스레터",
+                        "description": clean_body[:2000]
+                    })
+        mail.logout()
+    except Exception as e:
+        print(f"지메일 수집 오류: {e}")
+        
+    return items
 
 def fetch_rss_items():
     items = []
@@ -134,8 +244,8 @@ def send_to_notion(item, carousel_script):
         "properties": {
             "트렌드명": {"title": [{"text": {"content": item["title"]}}]},
             "출처": {"select": {"name": item["source"]}},
-            "키워드": {"multi_select": [{"name": "뉴스레터/RSS"}]},
-            "트렌드 점수": {"number": 90},
+            "키워드": {"multi_select": [{"name": "뉴스레터"}]},
+            "트렌드 점수": {"number": 95},
             "상태": {"status": {"name": "시작 전"}},
             "링크": {"url": item["link"]},
             "날짜": {"date": {"start": today}},
@@ -148,10 +258,11 @@ def main():
     existing_urls = get_existing_urls()
     print(f"📌 기존 저장된 링크 수: {len(existing_urls)}개")
     
-    rss_items = fetch_rss_items()
+    # RSS, 스티비 아카이브, 지메일 수집 통합
+    all_items = fetch_rss_items() + fetch_stibee_archives() + fetch_gmail_newsletters()
     new_count = 0
     
-    for item in rss_items:
+    for item in all_items:
         if item["link"] not in existing_urls:
             existing_urls.add(item["link"])
             print(f"🤖 캐러셀 대본 생성 중: {item['title']}")
