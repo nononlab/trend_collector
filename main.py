@@ -49,12 +49,12 @@ def get_existing_urls():
     return existing_urls
 
 def generate_carousel_script(title, content_text):
-    """Google Gemini 무료 API를 사용해 캐러셀 대본 생성"""
+    """Google Gemini 무료 API (gemini-1.5-flash) 사용"""
     if not GEMINI_API_KEY:
         print("⚠️ GEMINI_API_KEY가 설정되지 않았습니다.")
         return "Gemini API 키가 없습니다."
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     
     prompt = f"""
@@ -89,16 +89,17 @@ def generate_carousel_script(title, content_text):
         }]
     }
 
-    res = requests.post(url, headers=headers, json=payload)
-    if res.status_code == 200:
-        data = res.json()
-        try:
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=20)
+        if res.status_code == 200:
+            data = res.json()
             return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        except Exception as e:
-            return f"대본 파싱 에러: {e}"
-    else:
-        print(f"⚠️ Gemini API 오류 ({res.status_code}): {res.text}")
-        return f"대본 생성 실패 ({res.status_code})"
+        else:
+            print(f"⚠️ Gemini API 오류 ({res.status_code}): {res.text}")
+            return f"대본 생성 실패 ({res.status_code})"
+    except Exception as e:
+        print(f"⚠️ Gemini 통신 에러: {e}")
+        return "Gemini API 연결 실패"
 
 def fetch_rss_items():
     items = []
@@ -127,6 +128,7 @@ def fetch_rss_items():
     return items
 
 def fetch_gmail_newsletters():
+    """지메일 X-GM-RAW 기능을 활용해 '뉴스레터' 라벨의 안 읽은 메일을 한글 에러 없이 수집"""
     if not GMAIL_USER or not GMAIL_APP_PASSWORD:
         return []
 
@@ -134,13 +136,13 @@ def fetch_gmail_newsletters():
     try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
         mail.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+        mail.select('INBOX')
         
-        status, _ = mail.select('"뉴스레터"')
-        if status != 'OK':
-            mail.select('INBOX')
-            
-        status, messages = mail.search(None, 'UNSEEN')
+        # 지메일 전용 검색 쿼리 사용 (한글 라벨 지원)
+        status, messages = mail.search('utf-8', 'X-GM-RAW', 'label:뉴스레터 is:unread')
         if status != 'OK' or not messages[0]:
+            print("📬 새 지메일 뉴스레터가 없습니다.")
+            mail.logout()
             return []
 
         email_ids = messages[0].split()
@@ -150,9 +152,17 @@ def fetch_gmail_newsletters():
                 if isinstance(response_part, tuple):
                     msg = email.message_from_bytes(response_part[1])
                     
-                    subject, encoding = decode_header(msg["Subject"])[0]
-                    if isinstance(subject, bytes):
-                        subject = subject.decode(encoding if encoding else "utf-8", errors="ignore")
+                    subject_header = msg["Subject"]
+                    subject = "제목 없음"
+                    if subject_header:
+                        decoded_parts = decode_header(subject_header)
+                        sub_list = []
+                        for sub_bytes, encoding in decoded_parts:
+                            if isinstance(sub_bytes, bytes):
+                                sub_list.append(sub_bytes.decode(encoding if encoding else "utf-8", errors="ignore"))
+                            elif isinstance(sub_bytes, str):
+                                sub_list.append(sub_bytes)
+                        subject = "".join(sub_list)
                     
                     body = ""
                     if msg.is_multipart():
