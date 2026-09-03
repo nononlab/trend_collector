@@ -13,12 +13,12 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 
-# 수집할 RSS 및 스티비 아카이브 목록
+# 수집할 RSS 및 스티비 아카이브 목록 (limit으로 매체별 수집 개수 지정)
 RSS_FEEDS = [
-    {"name": "스티비 아카이브", "url": "https://page.stibee.com/rss/archives/325254"},
-    {"name": "뉴닉", "url": "https://www.newneek.co/rss"},
-    {"name": "고구마팜", "url": "https://gogumafarm.kr/feed/"},
-    {"name": "마케팅/트렌드 뉴스", "url": "https://news.google.com/rss/search?q=플랫폼+서비스+OR+Z세대+트렌드+OR+마케팅+사례+OR+팝업스토어&hl=ko&gl=KR&ceid=KR:ko"}
+    {"name": "고구마팜", "url": "https://gogumafarm.kr/feed/", "limit": 7},
+    {"name": "뉴닉", "url": "https://www.newneek.co/rss", "limit": 7},
+    {"name": "스티비 아카이브", "url": "https://page.stibee.com/rss/archives/325254", "limit": 7},
+    {"name": "마케팅/트렌드 뉴스", "url": "https://news.google.com/rss/search?q=플랫폼+서비스+OR+Z세대+트렌드+OR+마케팅+사례+OR+팝업스토어&hl=ko&gl=KR&ceid=KR:ko", "limit": 2}
 ]
 
 def get_existing_urls():
@@ -109,7 +109,8 @@ def fetch_rss_items():
             res = requests.get(feed["url"], headers=headers, timeout=10)
             if res.status_code == 200:
                 root = ET.fromstring(res.content)
-                for item in root.findall(".//item")[:2]:
+                fetch_limit = feed.get("limit", 5)
+                for item in root.findall(".//item")[:fetch_limit]:
                     title = item.find("title").text if item.find("title") is not None else ""
                     link = item.find("link").text if item.find("link") is not None else ""
                     desc = item.find("description").text if item.find("description") is not None else ""
@@ -128,7 +129,6 @@ def fetch_rss_items():
     return items
 
 def fetch_gmail_newsletters():
-    """지메일 X-GM-RAW 기능을 활용해 '뉴스레터' 라벨의 안 읽은 메일을 한글 에러 없이 수집"""
     if not GMAIL_USER or not GMAIL_APP_PASSWORD:
         return []
 
@@ -138,7 +138,6 @@ def fetch_gmail_newsletters():
         mail.login(GMAIL_USER, GMAIL_APP_PASSWORD)
         mail.select('INBOX')
         
-        # 지메일 전용 검색 쿼리 사용 (한글 라벨 지원)
         status, messages = mail.search('utf-8', 'X-GM-RAW', 'label:뉴스레터 is:unread')
         if status != 'OK' or not messages[0]:
             print("📬 새 지메일 뉴스레터가 없습니다.")
@@ -146,7 +145,7 @@ def fetch_gmail_newsletters():
             return []
 
         email_ids = messages[0].split()
-        for e_id in email_ids[-3:]:
+        for e_id in email_ids[-5:]:  # 안 읽은 지메일 최대 5개까지 수집
             _, msg_data = mail.fetch(e_id, '(RFC822)')
             for response_part in msg_data:
                 if isinstance(response_part, tuple):
