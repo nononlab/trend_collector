@@ -9,7 +9,7 @@ from datetime import datetime
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 
@@ -49,15 +49,13 @@ def get_existing_urls():
     return existing_urls
 
 def generate_carousel_script(title, content_text):
-    if not OPENAI_API_KEY:
-        print("⚠️ OPENAI_API_KEY가 없습니다.")
-        return "OpenAI API 키가 설정되지 않았습니다."
+    """Google Gemini 무료 API를 사용해 캐러셀 대본 생성"""
+    if not GEMINI_API_KEY:
+        print("⚠️ GEMINI_API_KEY가 설정되지 않았습니다.")
+        return "Gemini API 키가 없습니다."
     
-    url = "https://api.openai.com/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    headers = {"Content-Type": "application/json"}
     
     prompt = f"""
     당신은 인스타그램 트렌드/마케팅 캐러셀(카드뉴스) 전문 기획자입니다.
@@ -86,19 +84,20 @@ def generate_carousel_script(title, content_text):
     """
 
     payload = {
-        "model": "gpt-4o-mini",
-        "messages": [
-            {"role": "system", "content": "너는 트렌드/마케팅 캐러셀 카드뉴스 전문 에디터야."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.7
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }]
     }
 
     res = requests.post(url, headers=headers, json=payload)
     if res.status_code == 200:
-        return res.json()["choices"][0]["message"]["content"].strip()
+        data = res.json()
+        try:
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except Exception as e:
+            return f"대본 파싱 에러: {e}"
     else:
-        print(f"⚠️ OpenAI 오류: {res.status_code} - {res.text}")
+        print(f"⚠️ Gemini API 오류 ({res.status_code}): {res.text}")
         return f"대본 생성 실패 ({res.status_code})"
 
 def fetch_rss_items():
@@ -220,7 +219,7 @@ def main():
     for item in all_items:
         if item["link"] not in existing_urls:
             existing_urls.add(item["link"])
-            print(f"🤖 캐러셀 대본 생성 중: {item['title']}")
+            print(f"🤖 캐러셀 대본 생성 중 (Gemini): {item['title']}")
             script = generate_carousel_script(item["title"], item["description"])
             
             send_to_notion(item, script)
