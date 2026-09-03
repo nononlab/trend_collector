@@ -51,43 +51,44 @@ def get_existing_urls():
     return existing_urls
 
 def generate_carousel_script(title, content_text):
-    """카드뉴스 초간결 슬라이드 대본 생성"""
+    """'Why?' 중심의 시사점/인사이트 추출 캐러셀 대본 생성"""
     if not GEMINI_API_KEY:
         print("⚠️ GEMINI_API_KEY가 설정되지 않았습니다.")
         return "Gemini API 키가 없습니다."
     
     prompt = f"""
-    당신은 인스타그램 트렌드/마케팅 카드뉴스(캐러셀) 전문 기획자입니다.
-    아래 글을 읽고, 인스타그램 이미지 본문에 바로 들어갈 짧고 간결한 카드뉴스 대본을 작성해 주세요.
+    당신은 트렌드 현상에 대해 "왜 그럴까?(Why?)"라는 화두를 가볍게 던지고, 그 이면에 숨겨진 비즈니스/심리적 인사이트를 재치 있게 짚어주는 인스타그램 인플루언서입니다.
 
-    [작성 규칙]:
-    1. 긴 설명식 문장은 전부 배제하고, 카드뉴스 슬라이드에 바로 넣을 수 있게 **단문/불릿포인트 형식**으로 작성하세요.
-    2. 각 슬라이드당 본문 텍스트는 **2~3줄 이내(총 50자 내외)**로 매우 짧게 요약하세요.
-    3. 한눈에 들어오는 강렬한 문구와 가독성을 최우선으로 하세요.
+    아래 글을 읽고, 내 계정 컨셉에 맞춘 5장 분량의 카드뉴스 대본을 작성해 주세요.
+
+    [톤앤매너 & 작성 지침]:
+    1. 친근하면서도 호기심을 자극하는 말투(~할까요?, ~한 이유)를 사용하세요.
+    2. 복잡하고 긴 설명 대신 카드뉴스 이미지에 바로 넣을 수 있게 **단문/불릿포인트(2~3줄 내외)**로 작성하세요.
+    3. 단순히 '무슨 일이 일어났다'를 전달하기보다, **'왜 이런 현상이 생겨났는지' 그 이면의 숨은 원인과 인사이트**에 집중하세요.
 
     [글 제목]: {title}
     [글 내용]: {content_text[:1500]}
 
     [출력 양식]:
-    [1장 - 커버]
-    제목: (한눈에 사로잡는 강력한 훅 1문장)
-    부제목: (핵심 부연설명 1문장)
+    [1장 - 커버 (Question)]
+    제목: (Why? 화두를 던지는 호기심 유발 질문 1문장)
+    부제목: (현상을 한 줄로 나타내는 호기심 훅)
 
-    [2장 - 현상/이슈]
-    • (핵심 이슈 포인트 1)
-    • (핵심 이슈 포인트 2)
+    [2장 - 현상 (What)]
+    • (요즘 눈에 띄는 현상/사례 가볍게 소개 1)
+    • (현상/사례 포인트 2)
 
-    [3장 - 사례/특징]
-    • (주요 특징/사례 포인트 1)
-    • (주요 특징/사례 포인트 2)
+    [3장 - 이면의 원인 (Why?)]
+    • Why 1: (표면 뒤에 숨겨진 소비자 심리나 의도)
+    • Why 2: (기업/마케터가 노린 핵심 전략)
 
-    [4장 - 마케터 시사점]
-    • (핵심 인사이트 1)
-    • (핵심 인사이트 2)
+    [4장 - 시사점 (So What?)]
+    • (이 현상에서 우리가 건질 만한 가벼운 인사이트 1)
+    • (기획자/마케터가 적용해 볼 점 2)
 
-    [5장 - 요약/참여]
-    • 한 줄 요약: (짧은 핵심 정리)
-    • 댓글 유도: (대화/의견을 묻는 질문)
+    [5장 - 마무리 (Your Turn)]
+    • 한 줄 정리: (전체 관점을 밝히는 재치 있는 한 줄)
+    • 질문: (독자들에게 '여러분의 생각은 어떤가요?' 묻는 질문)
     """
 
     genai.configure(api_key=GEMINI_API_KEY)
@@ -256,7 +257,6 @@ def send_to_notion(item, carousel_script):
     }
     today = datetime.now().strftime("%Y-%m-%d")
     
-    # 캐러셀 대본 텍스트를 노션 본문 블록 구조(Children)로 변환
     children_blocks = []
     lines = carousel_script.strip().split('\n')
     
@@ -265,7 +265,6 @@ def send_to_notion(item, carousel_script):
         if not line_str:
             continue
             
-        # [1장 - 커버] 스타일 텍스트 -> 소제목(Heading 2) 블록 변환
         if line_str.startswith('[') and line_str.endswith(']'):
             children_blocks.append({
                 "object": "block",
@@ -274,7 +273,6 @@ def send_to_notion(item, carousel_script):
                     "rich_text": [{"type": "text", "text": {"content": line_str}}]
                 }
             })
-        # • 나 - 시작 텍스트 -> 글머리 기호 목록(Bulleted List) 블록 변환
         elif line_str.startswith('•') or line_str.startswith('-'):
             clean_content = line_str.lstrip('•- ').strip()
             children_blocks.append({
@@ -284,7 +282,6 @@ def send_to_notion(item, carousel_script):
                     "rich_text": [{"type": "text", "text": {"content": clean_content}}]
                 }
             })
-        # 일반 문장 -> 문단(Paragraph) 블록 변환
         else:
             children_blocks.append({
                 "object": "block",
