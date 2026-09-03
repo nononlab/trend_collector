@@ -51,39 +51,46 @@ def get_existing_urls():
     return existing_urls
 
 def generate_carousel_script(title, content_text):
-    """구글 공식 google-generativeai SDK 사용 (최신 3.6 / 3.5 모델 적용)"""
+    """카드뉴스 초간결 슬라이드 대본 생성"""
     if not GEMINI_API_KEY:
         print("⚠️ GEMINI_API_KEY가 설정되지 않았습니다.")
         return "Gemini API 키가 없습니다."
     
     prompt = f"""
-    당신은 인스타그램 트렌드/마케팅 캐러셀(카드뉴스) 전문 기획자입니다.
-    아래 뉴스레터 글을 바탕으로 5장 분량의 인스타그램 캐러셀 슬라이드 대본을 작성해 주세요.
+    당신은 인스타그램 트렌드/마케팅 카드뉴스(캐러셀) 전문 기획자입니다.
+    아래 글을 읽고, 인스타그램 이미지 본문에 바로 들어갈 짧고 간결한 카드뉴스 대본을 작성해 주세요.
+
+    [작성 규칙]:
+    1. 긴 설명식 문장은 전부 배제하고, 카드뉴스 슬라이드에 바로 넣을 수 있게 **단문/불릿포인트 형식**으로 작성하세요.
+    2. 각 슬라이드당 본문 텍스트는 **2~3줄 이내(총 50자 내외)**로 매우 짧게 요약하세요.
+    3. 한눈에 들어오는 강렬한 문구와 가독성을 최우선으로 하세요.
 
     [글 제목]: {title}
-    [글 내용/요약]: {content_text[:1500]}
+    [글 내용]: {content_text[:1500]}
 
     [출력 양식]:
     [1장 - 커버]
-    - 헤드카피 (이목을 끄는 강력한 훅):
-    - 서브카피:
+    제목: (한눈에 사로잡는 강력한 훅 1문장)
+    부제목: (핵심 부연설명 1문장)
 
-    [2장 - 배경/현상]
-    - 핵심 이슈 요약 (2-3문장):
+    [2장 - 현상/이슈]
+    • (핵심 이슈 포인트 1)
+    • (핵심 이슈 포인트 2)
 
-    [3장 - 핵심 사례 및 특징]
-    - 핵심 포인트 및 브랜드 사례 분석:
+    [3장 - 사례/특징]
+    • (주요 특징/사례 포인트 1)
+    • (주요 특징/사례 포인트 2)
 
-    [4장 - 마케터/기획자 시사점]
-    - 이 트렌드에서 얻을 수 있는 액션 플랜 2가지:
+    [4장 - 마케터 시사점]
+    • (핵심 인사이트 1)
+    • (핵심 인사이트 2)
 
-    [5장 - 요약 및 질문]
-    - 한 줄 요약:
-    - 댓글 유도 질문:
+    [5장 - 요약/참여]
+    • 한 줄 요약: (짧은 핵심 정리)
+    • 댓글 유도: (대화/의견을 묻는 질문)
     """
 
     genai.configure(api_key=GEMINI_API_KEY)
-    # 이미지에 노출된 최신 모델 API ID를 우선순위 순으로 배치합니다.
     models_to_try = [
         "gemini-3.6-flash",
         "gemini-3.5-flash-lite",
@@ -103,7 +110,6 @@ def generate_carousel_script(title, content_text):
     return "대본 생성 실패 (모든 Gemini 모델 응답 불가)"
 
 def fetch_wepick_articles():
-    """위픽레터 아티클 크롤링 수집"""
     items = []
     url = "https://letter.wepick.kr/latest"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -174,7 +180,6 @@ def fetch_rss_items():
     return items
 
 def fetch_gmail_newsletters():
-    """큰따옴표 감싼 X-GM-RAW 쿼리로 지메일 수집 파싱 오류 해결"""
     if not GMAIL_USER or not GMAIL_APP_PASSWORD:
         return []
 
@@ -184,7 +189,6 @@ def fetch_gmail_newsletters():
         mail.login(GMAIL_USER, GMAIL_APP_PASSWORD)
         mail.select('INBOX')
         
-        # X-GM-RAW 파라미터 전체를 큰따옴표("...")로 감싸 전달
         status, messages = mail.search('utf-8', 'X-GM-RAW', '"label:뉴스레터 is:unread"')
         
         if status != 'OK' or not messages[0]:
@@ -243,6 +247,7 @@ def fetch_gmail_newsletters():
     return items
 
 def send_to_notion(item, carousel_script):
+    """대본을 데이터베이스 표 속성이 아닌 노션 '페이지 본문' 블록으로 추가"""
     url = "https://api.notion.com/v1/pages"
     headers = {
         "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -251,6 +256,44 @@ def send_to_notion(item, carousel_script):
     }
     today = datetime.now().strftime("%Y-%m-%d")
     
+    # 캐러셀 대본 텍스트를 노션 본문 블록 구조(Children)로 변환
+    children_blocks = []
+    lines = carousel_script.strip().split('\n')
+    
+    for line in lines:
+        line_str = line.strip()
+        if not line_str:
+            continue
+            
+        # [1장 - 커버] 스타일 텍스트 -> 소제목(Heading 2) 블록 변환
+        if line_str.startswith('[') and line_str.endswith(']'):
+            children_blocks.append({
+                "object": "block",
+                "type": "heading_2",
+                "heading_2": {
+                    "rich_text": [{"type": "text", "text": {"content": line_str}}]
+                }
+            })
+        # • 나 - 시작 텍스트 -> 글머리 기호 목록(Bulleted List) 블록 변환
+        elif line_str.startswith('•') or line_str.startswith('-'):
+            clean_content = line_str.lstrip('•- ').strip()
+            children_blocks.append({
+                "object": "block",
+                "type": "bulleted_list_item",
+                "bulleted_list_item": {
+                    "rich_text": [{"type": "text", "text": {"content": clean_content}}]
+                }
+            })
+        # 일반 문장 -> 문단(Paragraph) 블록 변환
+        else:
+            children_blocks.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {"content": line_str}}]
+                }
+            })
+
     payload = {
         "parent": {"database_id": NOTION_DATABASE_ID},
         "properties": {
@@ -260,9 +303,9 @@ def send_to_notion(item, carousel_script):
             "트렌드 점수": {"number": 95},
             "상태": {"status": {"name": "시작 전"}},
             "링크": {"url": item["link"]},
-            "날짜": {"date": {"start": today}},
-            "캐러셀 대본": {"rich_text": [{"text": {"content": carousel_script[:2000]}}]}
-        }
+            "날짜": {"date": {"start": today}}
+        },
+        "children": children_blocks
     }
     requests.post(url, headers=headers, json=payload)
 
