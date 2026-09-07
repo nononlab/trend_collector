@@ -23,6 +23,11 @@ RSS_FEEDS = [
     {"name": "마케팅/트렌드 뉴스", "url": "https://news.google.com/rss/search?q=플랫폼+서비스+OR+Z세대+트렌드+OR+마케팅+사례+OR+팝업스토어&hl=ko&gl=KR&ceid=KR:ko", "limit": 2}
 ]
 
+# 제외할 시스템/구독 확인 메일 제목 키워드
+EXCLUDE_TITLE_KEYWORDS = [
+    "구독이 정상적으로", "신청되었습니다", "공유하셨습니다", "인증", "비밀번호", "회원가입", "수신동의"
+]
+
 def get_existing_urls():
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
     headers = {
@@ -51,7 +56,7 @@ def get_existing_urls():
     return existing_urls
 
 def generate_carousel_script(title, content_text):
-    """'Why?' 중심의 시사점/인사이트 추출 캐러셀 대본 생성"""
+    """'Why?' 중심의 시사점/인사이트 추출 캐러셀 대본 생성 (Gemini 3.6 / 3.5 적용)"""
     if not GEMINI_API_KEY:
         print("⚠️ GEMINI_API_KEY가 설정되지 않았습니다.")
         return "Gemini API 키가 없습니다."
@@ -94,9 +99,9 @@ def generate_carousel_script(title, content_text):
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
         models_to_try = [
-            "gemini-2.5-flash",
-            "gemini-2.0-flash",
-            "gemini-1.5-flash"
+            "gemini-3.6-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.5-flash"
         ]
 
         for model_name in models_to_try:
@@ -118,7 +123,7 @@ def generate_carousel_script(title, content_text):
 def fetch_wepick_articles():
     items = []
     url = "https://letter.wepick.kr/latest"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
@@ -160,10 +165,10 @@ def fetch_wepick_articles():
 
 def fetch_rss_items():
     items = []
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     for feed in RSS_FEEDS:
         try:
-            res = requests.get(feed["url"], headers=headers, timeout=10)
+            res = requests.get(feed["url"], headers=headers, timeout=15)
             if res.status_code == 200:
                 root = ET.fromstring(res.content)
                 fetch_limit = feed.get("limit", 5)
@@ -186,13 +191,11 @@ def fetch_rss_items():
     return items
 
 def fetch_gmail_newsletters():
-    """지메일 라벨 검색 대신 INBOX 최근 메일의 발신자/제목 키워드를 파이썬에서 파싱하여 수집"""
     if not GMAIL_USER or not GMAIL_APP_PASSWORD:
         print("⚠️ 지메일 계정 정보가 설정되지 않았습니다.")
         return []
 
     items = []
-    # 뉴스레터 자동 감지 키워드 리스트
     NEWSLETTER_KEYWORDS = [
         "응답하라", "마케팅레시피", "NEWNEEK", "뉴닉", "Trend A Word",
         "트렌드 어 워드", "오픈애즈", "뉴스레터", "레터", "마케팅", "트렌드", "캐릿"
@@ -204,7 +207,6 @@ def fetch_gmail_newsletters():
         mail.select('INBOX')
         print("📧 지메일 INBOX 연결 성공!")
         
-        # 표준 IMAP 검색 (에러 0%)
         status, messages = mail.search(None, 'ALL')
         if status != 'OK' or not messages[0]:
             print("📬 받은편지함에 메일이 없습니다.")
@@ -214,7 +216,6 @@ def fetch_gmail_newsletters():
         email_ids = messages[0].split()
         print(f"📬 최근 메일 총 {len(email_ids)}개 확인 중...")
         
-        # 최근 메일 15개 탐색
         for e_id in email_ids[-15:]:
             _, msg_data = mail.fetch(e_id, '(RFC822)')
             for response_part in msg_data:
@@ -224,7 +225,6 @@ def fetch_gmail_newsletters():
                     from_header = msg.get("From", "")
                     subject_header = msg.get("Subject", "")
                     
-                    # 제목 디코딩
                     subject = "제목 없음"
                     if subject_header:
                         decoded_parts = decode_header(subject_header)
@@ -236,7 +236,10 @@ def fetch_gmail_newsletters():
                                 sub_list.append(sub_bytes)
                         subject = "".join(sub_list)
                     
-                    # 발신자 또는 제목에 뉴스레터 키워드가 포함되었는지 확인
+                    # 시스템/구독 확인 메일은 제외
+                    if any(ex in subject for ex in EXCLUDE_TITLE_KEYWORDS):
+                        continue
+
                     full_target_text = f"{from_header} {subject}"
                     is_newsletter = any(kw.lower() in full_target_text.lower() for kw in NEWSLETTER_KEYWORDS)
                     
