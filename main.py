@@ -7,7 +7,7 @@ from email.header import decode_header
 import xml.etree.ElementTree as ET
 from bs4 import BeautifulSoup
 from datetime import datetime
-import google.generativeai as genai
+from google import genai
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
@@ -51,7 +51,7 @@ def get_existing_urls():
     return existing_urls
 
 def generate_carousel_script(title, content_text):
-    """'Why?' 중심의 시사점/인사이트 추출 캐러셀 대본 생성"""
+    """최신 google-genai SDK 활용 대본 생성"""
     if not GEMINI_API_KEY:
         print("⚠️ GEMINI_API_KEY가 설정되지 않았습니다.")
         return "Gemini API 키가 없습니다."
@@ -91,22 +91,27 @@ def generate_carousel_script(title, content_text):
     • 질문: (독자들에게 '여러분의 생각은 어떤가요?' 묻는 질문)
     """
 
-    genai.configure(api_key=GEMINI_API_KEY)
-    models_to_try = [
-        "gemini-3.6-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.5-flash",
-        "gemini-3.1-pro"
-    ]
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        models_to_try = [
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash"
+        ]
 
-    for model_name in models_to_try:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            if response and response.text:
-                return response.text.strip()
-        except Exception as e:
-            print(f"⚠️ Gemini 모델 시도 실패 ({model_name}): {e}")
+        for model_name in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt
+                )
+                if response and response.text:
+                    return response.text.strip()
+            except Exception as e:
+                print(f"⚠️ Gemini 모델 시도 실패 ({model_name}): {e}")
+
+    except Exception as e:
+        print(f"⚠️ Gemini 클라이언트 생성 오류: {e}")
 
     return "대본 생성 실패 (모든 Gemini 모델 응답 불가)"
 
@@ -181,7 +186,9 @@ def fetch_rss_items():
     return items
 
 def fetch_gmail_newsletters():
+    """지메일 상의 '뉴스레터' 라벨 메일 수집 (bytes 변환으로 ASCII 인코딩 에러 해결)"""
     if not GMAIL_USER or not GMAIL_APP_PASSWORD:
+        print("⚠️ 지메일 계정 정보가 설정되지 않았습니다.")
         return []
 
     items = []
@@ -189,15 +196,20 @@ def fetch_gmail_newsletters():
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
         mail.login(GMAIL_USER, GMAIL_APP_PASSWORD)
         mail.select('INBOX')
+        print("📧 지메일 접속 및 INBOX 연결 성공")
         
-        status, messages = mail.search('utf-8', 'X-GM-RAW', '"label:뉴스레터 is:unread"')
+        # ASCII 인코딩 실패를 막기 위해 바이트 객체로 전달
+        search_query = 'label:"뉴스레터"'.encode('utf-8')
+        status, messages = mail.search('utf-8', 'X-GM-RAW', search_query)
         
         if status != 'OK' or not messages[0]:
-            print("📬 새 지메일 뉴스레터가 없습니다.")
+            print("📬 지메일에서 '뉴스레터' 라벨이 부착된 메일을 찾지 못했습니다.")
             mail.logout()
             return []
 
         email_ids = messages[0].split()
+        print(f"📬 지메일에서 '뉴스레터' 라벨 메일 총 {len(email_ids)}개 발견!")
+        
         for e_id in email_ids[-5:]:
             _, msg_data = mail.fetch(e_id, '(RFC822)')
             for response_part in msg_data:
@@ -243,12 +255,11 @@ def fetch_gmail_newsletters():
                     })
         mail.logout()
     except Exception as e:
-        print(f"지메일 수집 오류: {e}")
+        print(f"⚠️ 지메일 수집 중 오류 발생: {e}")
         
     return items
 
 def send_to_notion(item, carousel_script):
-    """대본을 데이터베이스 표 속성이 아닌 노션 '페이지 본문' 블록으로 추가"""
     url = "https://api.notion.com/v1/pages"
     headers = {
         "Authorization": f"Bearer {NOTION_TOKEN}",
