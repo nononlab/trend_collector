@@ -186,40 +186,45 @@ def fetch_rss_items():
     return items
 
 def fetch_gmail_newsletters():
-    """imaplib의 잘못된 리터럴 변환을 우회하여 지메일에 다이렉트 명령어 전송"""
+    """지메일 라벨 검색 대신 INBOX 최근 메일의 발신자/제목 키워드를 파이썬에서 파싱하여 수집"""
     if not GMAIL_USER or not GMAIL_APP_PASSWORD:
         print("⚠️ 지메일 계정 정보가 설정되지 않았습니다.")
         return []
 
     items = []
+    # 뉴스레터 자동 감지 키워드 리스트
+    NEWSLETTER_KEYWORDS = [
+        "응답하라", "마케팅레시피", "NEWNEEK", "뉴닉", "Trend A Word",
+        "트렌드 어 워드", "오픈애즈", "뉴스레터", "레터", "마케팅", "트렌드", "캐릿"
+    ]
+
     try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
         mail.login(GMAIL_USER, GMAIL_APP_PASSWORD)
         mail.select('INBOX')
-        print("📧 지메일 접속 및 INBOX 연결 성공")
+        print("📧 지메일 INBOX 연결 성공!")
         
-        # imaplib 파싱 오류 우회: 다이렉트 UTF-8 IMAP SEARCH 명령어 조합
-        raw_query = 'label:뉴스레터'
-        tag = mail._new_tag()
-        cmd = tag + b' SEARCH CHARSET UTF-8 X-GM-RAW "' + raw_query.replace('"', '\\"').encode('utf-8') + b'"\r\n'
-        mail.send(cmd)
-        status, messages = mail._command_complete('SEARCH', tag)
-        
-        if status != 'OK' or not messages or not messages[0]:
-            print("📬 지메일에서 '뉴스레터' 라벨이 부착된 메일을 찾지 못했습니다.")
+        # 표준 IMAP 검색 (에러 0%)
+        status, messages = mail.search(None, 'ALL')
+        if status != 'OK' or not messages[0]:
+            print("📬 받은편지함에 메일이 없습니다.")
             mail.logout()
             return []
 
         email_ids = messages[0].split()
-        print(f"📬 지메일에서 '뉴스레터' 라벨 메일 총 {len(email_ids)}개 발견!")
+        print(f"📬 최근 메일 총 {len(email_ids)}개 확인 중...")
         
-        for e_id in email_ids[-5:]:
+        # 최근 메일 15개 탐색
+        for e_id in email_ids[-15:]:
             _, msg_data = mail.fetch(e_id, '(RFC822)')
             for response_part in msg_data:
                 if isinstance(response_part, tuple):
                     msg = email.message_from_bytes(response_part[1])
                     
-                    subject_header = msg["Subject"]
+                    from_header = msg.get("From", "")
+                    subject_header = msg.get("Subject", "")
+                    
+                    # 제목 디코딩
                     subject = "제목 없음"
                     if subject_header:
                         decoded_parts = decode_header(subject_header)
@@ -231,31 +236,38 @@ def fetch_gmail_newsletters():
                                 sub_list.append(sub_bytes)
                         subject = "".join(sub_list)
                     
-                    body = ""
-                    if msg.is_multipart():
-                        for part in msg.walk():
-                            content_type = part.get_content_type()
-                            if content_type in ["text/plain", "text/html"]:
-                                try:
-                                    body = part.get_payload(decode=True).decode("utf-8", errors="ignore")
-                                    break
-                                except:
-                                    pass
-                    else:
-                        body = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
+                    # 발신자 또는 제목에 뉴스레터 키워드가 포함되었는지 확인
+                    full_target_text = f"{from_header} {subject}"
+                    is_newsletter = any(kw.lower() in full_target_text.lower() for kw in NEWSLETTER_KEYWORDS)
                     
-                    clean_body = re.sub(r'<[^>]+>', '', body)
-                    clean_body = re.sub(r'\s+', ' ', clean_body).strip()
-                    
-                    msg_id = msg.get("Message-ID", f"email_{e_id.decode()}")
-                    fake_link = f"https://mail.google.com/mail/#search/{msg_id}"
-                    
-                    items.append({
-                        "title": subject,
-                        "link": fake_link,
-                        "source": "지메일 뉴스레터",
-                        "description": clean_body[:2000]
-                    })
+                    if is_newsletter:
+                        body = ""
+                        if msg.is_multipart():
+                            for part in msg.walk():
+                                content_type = part.get_content_type()
+                                if content_type in ["text/plain", "text/html"]:
+                                    try:
+                                        body = part.get_payload(decode=True).decode("utf-8", errors="ignore")
+                                        break
+                                    except:
+                                        pass
+                        else:
+                            body = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
+                        
+                        clean_body = re.sub(r'<[^>]+>', '', body)
+                        clean_body = re.sub(r'\s+', ' ', clean_body).strip()
+                        
+                        msg_id = msg.get("Message-ID", f"email_{e_id.decode()}")
+                        fake_link = f"https://mail.google.com/mail/#search/{msg_id}"
+                        
+                        items.append({
+                            "title": subject,
+                            "link": fake_link,
+                            "source": "지메일 뉴스레터",
+                            "description": clean_body[:2000]
+                        })
+                        print(f"  ✉️ 지메일 뉴스레터 감지 완료: {subject}")
+                        
         mail.logout()
     except Exception as e:
         print(f"⚠️ 지메일 수집 중 오류 발생: {e}")
