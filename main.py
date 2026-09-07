@@ -51,7 +51,7 @@ def get_existing_urls():
     return existing_urls
 
 def generate_carousel_script(title, content_text):
-    """최신 google-genai SDK 활용 대본 생성"""
+    """'Why?' 중심의 시사점/인사이트 추출 캐러셀 대본 생성"""
     if not GEMINI_API_KEY:
         print("⚠️ GEMINI_API_KEY가 설정되지 않았습니다.")
         return "Gemini API 키가 없습니다."
@@ -186,7 +186,7 @@ def fetch_rss_items():
     return items
 
 def fetch_gmail_newsletters():
-    """지메일 상의 '뉴스레터' 라벨 메일 수집 (bytes 변환으로 ASCII 인코딩 에러 해결)"""
+    """imaplib의 잘못된 리터럴 변환을 우회하여 지메일에 다이렉트 명령어 전송"""
     if not GMAIL_USER or not GMAIL_APP_PASSWORD:
         print("⚠️ 지메일 계정 정보가 설정되지 않았습니다.")
         return []
@@ -198,11 +198,14 @@ def fetch_gmail_newsletters():
         mail.select('INBOX')
         print("📧 지메일 접속 및 INBOX 연결 성공")
         
-        # ASCII 인코딩 실패를 막기 위해 바이트 객체로 전달
-        search_query = 'label:"뉴스레터"'.encode('utf-8')
-        status, messages = mail.search('utf-8', 'X-GM-RAW', search_query)
+        # imaplib 파싱 오류 우회: 다이렉트 UTF-8 IMAP SEARCH 명령어 조합
+        raw_query = 'label:뉴스레터'
+        tag = mail._new_tag()
+        cmd = tag + b' SEARCH CHARSET UTF-8 X-GM-RAW "' + raw_query.replace('"', '\\"').encode('utf-8') + b'"\r\n'
+        mail.send(cmd)
+        status, messages = mail._command_complete('SEARCH', tag)
         
-        if status != 'OK' or not messages[0]:
+        if status != 'OK' or not messages or not messages[0]:
             print("📬 지메일에서 '뉴스레터' 라벨이 부착된 메일을 찾지 못했습니다.")
             mail.logout()
             return []
